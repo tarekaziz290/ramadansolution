@@ -1,0 +1,951 @@
+<!DOCTYPE html>
+<html lang="en" class="">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Debrecen Free Iftar Tracker</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['system-ui', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { font-family: 'system-ui', sans-serif; transition: background 0.3s, color 0.3s; overflow-x: hidden; background: #fff8f2; }
+        .dark body { background: #111827; }
+        #map { height: 350px; width: 100%; border-bottom: 4px solid #ea580c; z-index: 10; background: #eee; }
+        .dark #map { filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%); }
+        .iftar-marker { font-size: 24px; cursor: pointer; display: flex; align-items: center; justify-content: center; text-shadow: 0 0 6px rgba(0,0,0,0.4); }
+        .glass { background: rgba(255, 255, 255, 0.85); backdrop-filter: blur(12px); }
+        .dark .glass { background: rgba(31, 41, 55, 0.85); }
+
+        #preloader { position: fixed; inset: 0; background: white; z-index: 1000; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 20px; }
+        .dark #preloader { background: #111827; color: white; }
+
+        @keyframes marquee { 0% { transform: translateX(100%); } 100% { transform: translateX(-100%); } }
+        .animate-marquee { display: inline-block; animation: marquee 20s linear infinite; }
+        .fade-quote { opacity: 0; transition: opacity 1s ease-in-out; }
+        .fade-quote.show { opacity: 1; }
+
+        #leaderboard-box { position: fixed; top: 120px; right: 10px; width: 150px; z-index: 45; }
+        .admin-badge { position: fixed; top: 70px; right: 10px; background: red; color: white; padding: 5px 12px; border-radius: 20px; font-size: 10px; font-weight: bold; z-index: 999; }
+        .blue-tick { color: #1d9bf0; font-size: 0.8em; margin-left: 4px; }
+
+        .dev-card { background: linear-gradient(135deg, #ea580c, #f97316); color: white; border-radius: 24px; padding: 20px; text-align: center; box-shadow: 0 10px 20px rgba(234, 88, 12, 0.2); margin-bottom: 100px; }
+
+        #custom-alert { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 2000; align-items: center; justify-content: center; padding: 20px; }
+        #custom-alert.show { display: flex; }
+        .alert-content { background: white; padding: 30px; border-radius: 25px; max-width: 400px; width: 100%; text-align: center; border-top: 10px solid #16a34a; box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1); }
+        .dark .alert-content { background: #1f2937; }
+
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #f97316; border-radius: 2px; }
+
+        /* Leaflet marker override */
+        .leaflet-marker-icon.iftar-marker-div {
+            background: none !important;
+            border: none !important;
+        }
+
+        /* Dark mode bg */
+        .dark { background-color: #111827; }
+        .dark body { background-color: #111827; color: #f9fafb; }
+
+        /* Animated ping for live indicator */
+        @keyframes ping {
+            75%, 100% { transform: scale(2); opacity: 0; }
+        }
+        .animate-ping { animation: ping 1s cubic-bezier(0, 0, 0.2, 1) infinite; }
+
+        /* Pulse animation */
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: .5; }
+        }
+        .animate-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+
+        /* Smooth transitions */
+        * { box-sizing: border-box; }
+
+        /* Card style matching original */
+        .location-card {
+            background: white;
+            border-radius: 2.5rem;
+            padding: 1.75rem;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+            border: 1px solid #fff7ed;
+        }
+        .dark .location-card {
+            background: #1f2937;
+            border-color: #374151;
+        }
+    </style>
+</head>
+<body class="bg-[#fff8f2] dark:bg-gray-900 min-h-screen">
+
+    <!-- Custom Alert -->
+    <div id="custom-alert">
+        <div class="alert-content">
+            <div class="text-green-600 dark:text-green-400 text-5xl mb-4"><i class="fa-solid fa-circle-check"></i></div>
+            <p id="alert-msg" class="text-green-700 dark:text-green-400 font-bold text-lg mb-6 leading-relaxed"></p>
+            <button onclick="closeAlert()" class="bg-green-600 text-white px-8 py-3 rounded-xl font-bold hover:bg-green-700 transition-colors">OK</button>
+        </div>
+    </div>
+
+    <!-- Preloader -->
+    <div id="preloader">
+        <div class="text-6xl mb-4">🌙</div>
+        <p class="text-orange-600 font-bold mt-4 animate-pulse text-xl px-4">Preparing your iftar locations... 😋</p>
+    </div>
+
+    <!-- Admin Badge (hidden by default) -->
+    <div id="adminBadge" class="admin-badge hidden shadow-lg animate-pulse">ADMIN MODE ACTIVE</div>
+
+    <!-- Leaderboard Box -->
+    <div id="leaderboard-box" class="bg-white/90 dark:bg-gray-800/90 backdrop-blur p-3 rounded-2xl shadow-xl border border-orange-200 dark:border-gray-700 hidden sm:block">
+        <h4 class="text-[10px] font-black uppercase text-orange-600 mb-2 border-b border-orange-100 pb-1 flex items-center gap-1">
+            <i class="fa-solid fa-trophy"></i> Top Contributors
+        </h4>
+        <div id="leaderboard-list" class="space-y-2 max-h-40 overflow-y-auto custom-scrollbar">
+            <div class="flex justify-between items-center text-[10px] font-bold">
+                <span class="truncate w-20 text-gray-600 dark:text-gray-300">1. -</span>
+                <span class="bg-orange-100 text-orange-600 px-1.5 rounded">0</span>
+            </div>
+            <div class="flex justify-between items-center text-[10px] font-bold">
+                <span class="truncate w-20 text-gray-600 dark:text-gray-300">2. -</span>
+                <span class="bg-orange-100 text-orange-600 px-1.5 rounded">0</span>
+            </div>
+            <div class="flex justify-between items-center text-[10px] font-bold">
+                <span class="truncate w-20 text-gray-600 dark:text-gray-300">3. -</span>
+                <span class="bg-orange-100 text-orange-600 px-1.5 rounded">0</span>
+            </div>
+            <div class="flex justify-between items-center text-[10px] font-bold">
+                <span class="truncate w-20 text-gray-600 dark:text-gray-300">4. -</span>
+                <span class="bg-orange-100 text-orange-600 px-1.5 rounded">0</span>
+            </div>
+            <div class="flex justify-between items-center text-[10px] font-bold">
+                <span class="truncate w-20 text-gray-600 dark:text-gray-300">5. -</span>
+                <span class="bg-orange-100 text-orange-600 px-1.5 rounded">0</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sticky Top Bar -->
+    <div class="bg-stone-900 text-white py-3 px-4 flex justify-between items-center sticky top-0 z-[60]">
+        <div class="text-[11px] font-bold text-orange-400" id="countdown">IFTAR: 7:30:00</div>
+        <div class="flex gap-4 items-center">
+            <button onclick="showNotifAlert()" title="Notifications" id="notif-btn" class="text-orange-400 text-sm">
+                <i class="fa-solid fa-bell" id="notif-icon"></i>
+            </button>
+            <button onclick="toggleDarkMode()" title="Dark Mode" class="text-orange-400">
+                <i id="dark-icon" class="fa-solid fa-moon"></i>
+            </button>
+        </div>
+    </div>
+
+    <!-- Marquee Banner -->
+    <div class="bg-orange-600 text-white text-[10px] py-1 font-bold overflow-hidden border-b border-orange-700">
+        <div class="animate-marquee whitespace-nowrap">
+            🌙 Help others by sharing accurate iftar locations. Add a point and get your name on the leaderboard! &nbsp;&nbsp;&nbsp; Please don't share false information during Ramadan.
+        </div>
+    </div>
+
+    <!-- Map -->
+    <div id="map"></div>
+
+    <!-- Header -->
+    <header class="py-6 px-4 text-center glass border-b dark:border-gray-700 sticky top-[44px] z-50 shadow-sm">
+        <h1 class="text-2xl font-black text-orange-600 tracking-tighter uppercase">FREE IFTAR IN DEBRECEN 🌙</h1>
+        <p id="locationText" class="text-sm text-gray-600 dark:text-gray-400 mt-1">Detecting location...</p>
+        <div class="mt-2 inline-flex items-center gap-2 bg-orange-100 dark:bg-gray-700 text-orange-700 dark:text-orange-400 px-4 py-1 rounded-full text-[10px] font-bold">
+            <span class="relative flex h-2 w-2">
+                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                <span class="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+            </span>
+            <span id="active-count">15</span> Live Locations
+        </div>
+    </header>
+
+    <!-- Ramadan Companion: Countdown -->
+    <div class="max-w-md mx-auto px-4 mt-6">
+        <div class="location-card text-center">
+            <h2 id="countdown-iftar" class="text-xl font-bold text-orange-600 dark:text-orange-400">
+                Loading Iftar Time...
+            </h2>
+        </div>
+    </div>
+
+    <!-- Ramadan Companion: Prayer Times -->
+    <div class="max-w-md mx-auto px-4 mt-6">
+        <div class="location-card text-center">
+            <h3 class="text-lg font-black text-orange-600 dark:text-orange-400 mb-3">🕌 Prayer Times</h3>
+            <div class="grid grid-cols-3 gap-3 text-sm font-semibold text-gray-700 dark:text-gray-300">
+                <div>Fajr<br><span id="fajr">--</span></div>
+                <div>Dhuhr<br><span id="dhuhr">--</span></div>
+                <div>Asr<br><span id="asr">--</span></div>
+                <div>Maghrib<br><span id="maghrib">--</span></div>
+                <div>Isha<br><span id="isha">--</span></div>
+                <div>Sunrise<br><span id="sunrise">--</span></div>
+            </div>
+            <p class="text-xs mt-3 text-gray-600 dark:text-gray-400">
+                Sehri ends at <span id="sehri-end" class="font-bold text-orange-600 dark:text-orange-400">--</span>
+            </p>
+        </div>
+    </div>
+
+    <!-- Ramadan Companion: Ramadan Calendar -->
+    <div class="max-w-md mx-auto px-4 mt-6">
+        <div class="location-card">
+            <h3 class="text-lg font-black text-orange-600 dark:text-orange-400 mb-3 text-center">
+                📅 Ramadan Calendar
+            </h3>
+            <div id="ramadan-calendar" class="overflow-x-auto text-xs"></div>
+            <p class="text-[10px] text-orange-600 dark:text-orange-400 text-center mt-3 px-2 font-semibold">
+                ⚠️ Times may vary ±2 to ±10 minutes due to API calculations. Please verify with local mosque.
+            </p>
+        </div>
+    </div>
+
+    <!-- Search & Filter -->
+    <div class="max-w-md mx-auto px-4 mt-6 flex gap-2">
+        <input id="search-input" oninput="applyFilters()" placeholder="Search area or mosque..." class="flex-1 p-3 rounded-xl border dark:bg-gray-800 dark:border-gray-700 outline-none text-sm focus:border-orange-500 dark:text-white">
+        <select id="food-filter" onchange="applyFilters()" class="p-3 rounded-xl border dark:bg-gray-800 dark:border-gray-700 text-sm font-bold bg-white dark:text-white focus:border-orange-500 outline-none">
+            <option value="">All</option>
+            <option value="Dates">Dates</option>
+            <option value="Soup">Soup</option>
+            <option value="Pastries">Pastries</option>
+            <option value="Tea">Tea/Coffee</option>
+            <option value="Mixed">Mixed</option>
+        </select>
+    </div>
+
+    <!-- Cards Container -->
+    <main id="post-container" class="max-w-md mx-auto px-4 mt-8 space-y-6">
+        <!-- Cards will be injected here by JS -->
+    </main>
+
+    <!-- Developer Card -->
+    <div class="max-w-md mx-auto px-4 mt-6">
+        <div class="dev-card">
+            <p class="text-[10px] uppercase font-bold opacity-80 mb-1 tracking-widest">Designed &amp; Developed For</p>
+            <h2 class="text-xl font-black mb-4">Debrecen Muslim Community by <br>"MD Tarek Aziz"</h2>
+            <div class="flex justify-center gap-6">
+                <a href="https://www.facebook.com/groups/muslimstudentsindebrecen" target="_blank" title="Muslim students" class="text-white text-2xl hover:scale-110 transition-transform"><i class="fa-brands fa-facebook"></i></a>
+                <a href="#" target="_blank" class="text-white text-2xl hover:scale-110 transition-transform"><i class="fa-brands fa-instagram"></i></a>
+                <a href="#" target="_blank" class="text-white text-2xl hover:scale-110 transition-transform"><i class="fa-brands fa-whatsapp"></i></a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Islamic Quote (floating) -->
+    <div id="islamic-quote" class="fixed bottom-24 left-1/2 -translate-x-1/2 bg-white dark:bg-gray-800 text-gray-800 dark:text-white px-6 py-3 rounded-xl shadow-lg fade-quote z-50 text-center font-semibold text-sm w-[85%] max-w-xs border border-orange-100 dark:border-gray-700 show">
+        Prayers and good deeds bring blessings.
+    </div>
+
+    <!-- Floating Add Button -->
+    <div class="fixed bottom-6 left-1/2 -translate-x-1/2 w-full max-w-md px-4 z-40">
+        <button onclick="toggleForm()" class="w-full bg-orange-600 hover:bg-orange-700 text-white py-4 rounded-2xl font-black text-sm shadow-2xl flex items-center justify-center gap-2 transition-all active:scale-95">
+            📍 Add Iftar Point
+        </button>
+    </div>
+
+    <!-- Add Form Modal -->
+    <div id="add-form" class="hidden fixed inset-0 bg-black/80 backdrop-blur-md flex items-end justify-center z-[120]">
+        <div class="bg-white dark:bg-gray-800 w-full max-w-md p-8 rounded-t-[3rem] shadow-2xl overflow-y-auto max-h-[90vh]">
+            <h2 class="text-xl font-bold mb-4 text-orange-600">Add New Location 📝</h2>
+            <input id="user-name" type="text" placeholder="Your name (for leaderboard)" class="w-full p-4 bg-gray-100 dark:bg-gray-700 rounded-2xl mb-3 outline-none dark:text-white border focus:border-orange-500">
+            <input id="loc-name" type="text" placeholder="Area name (e.g., Petőfi Street)" class="w-full p-4 bg-gray-100 dark:bg-gray-700 rounded-2xl mb-3 outline-none dark:text-white border focus:border-orange-500">
+            <input id="mosque-name" type="text" placeholder="Mosque or venue name (required)" class="w-full p-4 bg-gray-100 dark:bg-gray-700 rounded-2xl mb-3 outline-none dark:text-white border border-red-200 focus:border-orange-500">
+            <select id="food-type" class="w-full p-4 bg-gray-100 dark:bg-gray-700 rounded-2xl mb-3 outline-none dark:text-white border focus:border-orange-500 font-bold">
+                <option value="Biriyani">Biriyani</option>
+                <option value="Fruits & Salads">Furits & Salads</option>
+                <option value="Fast food">Fast food</option>
+                <option value="Rice & Curry">Rice & Curry</option>
+                <option value="Desserts">Desserts</option>
+                <option value="Mixed">Mixed</option>
+                <option value="Other">Other</option>
+            </select>
+            <textarea id="loc-desc" placeholder="Details (landmark, timing, etc.)..." class="w-full p-4 bg-gray-100 dark:bg-gray-700 rounded-2xl mb-6 outline-none h-24 dark:text-white border focus:border-orange-500"></textarea>
+            <div class="flex gap-4">
+                <button onclick="toggleForm()" class="flex-1 font-bold text-gray-400">Cancel</button>
+                <button onclick="submitForm()" id="submit-btn" class="flex-[2] bg-orange-600 text-white py-4 rounded-2xl font-black">Save to Map</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <script>
+        // ==================== DATA ====================
+        const biriyaniData = [
+           
+        ];
+
+        let allData = [...biriyaniData];
+        let filteredData = [...biriyaniData];
+        let map;
+        let markers = [];
+        let maghribTime = null;
+        let currentCity = 'Debrecen';
+        let currentCountry = 'Hungary';
+        let notificationSent = false;
+
+        // ==================== LOCAL STORAGE ====================
+        const STORAGE_KEY = 'iftar_locations_debrecen';
+        const VOTES_KEY = 'iftar_votes_debrecen';
+
+        function saveData() {
+            try {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(allData));
+                updateLeaderboard();
+            } catch (e) {
+                console.error('Failed to save data:', e);
+            }
+        }
+
+        function loadData() {
+            try {
+                const saved = localStorage.getItem(STORAGE_KEY);
+                if (saved) {
+                    const parsed = JSON.parse(saved);
+                    if (Array.isArray(parsed) && parsed.length > 0) {
+                        allData = parsed;
+                        filteredData = [...allData];
+                        return true; // Data loaded
+                    }
+                }
+            } catch (e) {
+                console.error('Failed to load data:', e);
+            }
+            return false; // No data loaded
+        }
+
+        function saveVote(id, type) {
+            try {
+                const votes = JSON.parse(localStorage.getItem(VOTES_KEY) || '{}');
+                if (!votes[id]) votes[id] = {};
+                votes[id][type] = (votes[id][type] || 0) + 1;
+                localStorage.setItem(VOTES_KEY, JSON.stringify(votes));
+            } catch (e) {
+                console.error('Failed to save vote:', e);
+            }
+        }
+
+        function hasVoted(id) {
+            try {
+                const votes = JSON.parse(localStorage.getItem(VOTES_KEY) || '{}');
+                return votes[id] && (votes[id].true > 0 || votes[id].fake > 0);
+            } catch (e) {
+                return false;
+            }
+        }
+
+        function updateLeaderboard() {
+            const contributors = {};
+            allData.forEach(item => {
+                if (item.by && item.by !== 'Anonymous') {
+                    contributors[item.by] = (contributors[item.by] || 0) + 1;
+                }
+            });
+            const sorted = Object.entries(contributors)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 5);
+            const leaderboardEl = document.getElementById('leaderboard-list');
+            if (leaderboardEl) {
+                leaderboardEl.innerHTML = '';
+                if (sorted.length === 0) {
+                    for (let i = 1; i <= 5; i++) {
+                        const div = document.createElement('div');
+                        div.className = 'flex justify-between items-center text-[10px] font-bold';
+                        div.innerHTML = `<span class="truncate w-20 text-gray-600 dark:text-gray-300">${i}. -</span><span class="bg-orange-100 text-orange-600 px-1.5 rounded">0</span>`;
+                        leaderboardEl.appendChild(div);
+                    }
+                } else {
+                    sorted.forEach(([name, count], idx) => {
+                        const div = document.createElement('div');
+                        div.className = 'flex justify-between items-center text-[10px] font-bold';
+                        div.innerHTML = `<span class="truncate w-20 text-gray-600 dark:text-gray-300">${idx + 1}. ${name}</span><span class="bg-orange-100 dark:bg-orange-900 text-orange-600 dark:text-orange-400 px-1.5 rounded">${count}</span>`;
+                        leaderboardEl.appendChild(div);
+                    });
+                    for (let i = sorted.length; i < 5; i++) {
+                        const div = document.createElement('div');
+                        div.className = 'flex justify-between items-center text-[10px] font-bold';
+                        div.innerHTML = `<span class="truncate w-20 text-gray-600 dark:text-gray-300">${i + 1}. -</span><span class="bg-orange-100 text-orange-600 px-1.5 rounded">0</span>`;
+                        leaderboardEl.appendChild(div);
+                    }
+                }
+            }
+        }
+
+        // ==================== LOCATION DETECTION ====================
+        async function detectLocation() {
+            const locationTextEl = document.getElementById('locationText');
+            if (!navigator.geolocation) {
+                locationTextEl.textContent = `${currentCity}, ${currentCountry} (Location API not available)`;
+                loadPrayerData(currentCity, currentCountry);
+                return;
+            }
+            
+            locationTextEl.textContent = 'Detecting location...';
+            
+            navigator.geolocation.getCurrentPosition(
+                async pos => {
+                    const lat = pos.coords.latitude;
+                    const lon = pos.coords.longitude;
+                    try {
+                        const res = await fetch(
+                            `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`
+                        );
+                        const data = await res.json();
+                        currentCity = data.address.city || data.address.town || data.address.village || 'Debrecen';
+                        currentCountry = data.address.country || 'Hungary';
+                        locationTextEl.textContent = `${currentCity}, ${currentCountry}`;
+                    } catch (_) {
+                        locationTextEl.textContent = `${currentCity}, ${currentCountry}`;
+                    }
+                    loadPrayerData(currentCity, currentCountry);
+                },
+                error => {
+                    // Location access denied or error
+                    let errorMsg = `${currentCity}, ${currentCountry}`;
+                    if (error.code === error.PERMISSION_DENIED) {
+                        errorMsg += ' (Location access denied)';
+                    } else if (error.code === error.POSITION_UNAVAILABLE) {
+                        errorMsg += ' (Location unavailable)';
+                    } else if (error.code === error.TIMEOUT) {
+                        errorMsg += ' (Location timeout)';
+                    }
+                    locationTextEl.textContent = errorMsg;
+                    loadPrayerData(currentCity, currentCountry);
+                },
+                {
+                    enableHighAccuracy: false,
+                    timeout: 10000,
+                    maximumAge: 300000 // 5 minutes cache
+                }
+            );
+        }
+
+        // ==================== FETCH PRAYER TIMES ====================
+        async function fetchPrayerTimes(city, country) {
+            const today = new Date().toISOString().split('T')[0];
+            try {
+                const res = await fetch(
+                    `https://api.aladhan.com/v1/timingsByCity?city=${encodeURIComponent(city)}&country=${encodeURIComponent(country)}&method=1&date=${today}`
+                );
+                const data = await res.json();
+                const t = data.data.timings;
+                document.getElementById('fajr').textContent = t.Fajr;
+                document.getElementById('dhuhr').textContent = t.Dhuhr;
+                document.getElementById('asr').textContent = t.Asr;
+                document.getElementById('maghrib').textContent = t.Maghrib;
+                document.getElementById('isha').textContent = t.Isha;
+                document.getElementById('sunrise').textContent = t.Sunrise;
+                document.getElementById('sehri-end').textContent = t.Fajr;
+                maghribTime = t.Maghrib;
+            } catch (_) {
+                maghribTime = '19:30';
+            }
+        }
+
+        // ==================== RAMADAN CALENDAR ====================
+        function stripTimeZone(t) {
+            if (typeof t !== 'string') return t || '--';
+            return t.replace(/\s*\([^)]*\)\s*$/, '').trim();
+        }
+
+        async function generateCalendar(city, country) {
+            const now = new Date();
+            const year = now.getFullYear();
+            const currentMonth = now.getMonth() + 1;
+            const ramadanDays = [];
+            const monthsToFetch = [
+                { month: currentMonth, year },
+                { month: currentMonth === 12 ? 1 : currentMonth + 1, year: currentMonth === 12 ? year + 1 : year }
+            ];
+            if (currentMonth > 1) {
+                monthsToFetch.unshift({ month: currentMonth - 1, year });
+            }
+
+            try {
+                for (const { month, year: y } of monthsToFetch) {
+                    const res = await fetch(
+                        `https://api.aladhan.com/v1/calendarByCity?city=${encodeURIComponent(city)}&country=${encodeURIComponent(country)}&method=1&month=${month}&year=${y}`
+                    );
+                    const json = await res.json();
+                    const days = json.data || [];
+                    if (!Array.isArray(days)) continue;
+                    days.forEach(day => {
+                        const hijri = day.date && day.date.hijri;
+                        if (hijri && hijri.month && hijri.month.number === 9) {
+                            const gregorianDate = day.date.gregorian ? day.date.gregorian.date : '';
+                            const fajr = stripTimeZone(day.timings && day.timings.Fajr);
+                            const maghrib = stripTimeZone(day.timings && day.timings.Maghrib);
+                            ramadanDays.push({
+                                date: gregorianDate,
+                                dayNum: parseInt(hijri.day, 10) || 0,
+                                fajr,
+                                maghrib
+                            });
+                        }
+                    });
+                }
+
+                ramadanDays.sort((a, b) => a.dayNum - b.dayNum);
+
+                let table = '<table class="w-full text-center border border-gray-200 dark:border-gray-600"><tr class="bg-orange-100 dark:bg-orange-900/30 text-orange-800 dark:text-orange-200"><th class="p-2">Date</th><th>Sehri</th><th>Iftar</th></tr>';
+                if (ramadanDays.length === 0) {
+                    table += '<tr><td colspan="3" class="p-3 text-gray-500 dark:text-gray-400">No Ramadan days in this period. Try again during Ramadan.</td></tr>';
+                } else {
+                    ramadanDays.forEach(d => {
+                        table += `<tr class="border-b border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300"><td class="p-2">${d.date}</td><td>${d.fajr}</td><td>${d.maghrib}</td></tr>`;
+                    });
+                }
+                table += '</table>';
+                document.getElementById('ramadan-calendar').innerHTML = table;
+            } catch (_) {
+                document.getElementById('ramadan-calendar').innerHTML = '<p class="text-gray-500 text-center py-2">Calendar unavailable</p>';
+            }
+        }
+
+        function loadPrayerData(city, country) {
+            fetchPrayerTimes(city, country);
+            generateCalendar(city, country);
+        }
+
+        // ==================== NOTIFICATIONS ====================
+        async function setupNotifications() {
+            if (!('Notification' in window)) {
+                console.log('This browser does not support notifications');
+                updateNotificationIcon('not_supported');
+                return;
+            }
+            
+            updateNotificationIcon(Notification.permission);
+            
+            // Check if already granted
+            if (Notification.permission === 'granted') {
+                return;
+            }
+            
+            // Request permission (only if not denied)
+            if (Notification.permission !== 'denied') {
+                try {
+                    await Notification.requestPermission();
+                    updateNotificationIcon(Notification.permission);
+                } catch (e) {
+                    console.error('Notification permission error:', e);
+                }
+            }
+        }
+
+        function updateNotificationIcon(permission) {
+            const icon = document.getElementById('notif-icon');
+            const btn = document.getElementById('notif-btn');
+            if (!icon || !btn) return;
+            
+            if (permission === 'granted') {
+                icon.className = 'fa-solid fa-bell';
+                btn.title = 'Notifications enabled';
+                btn.classList.remove('text-gray-400');
+                btn.classList.add('text-green-500');
+            } else if (permission === 'denied') {
+                icon.className = 'fa-solid fa-bell-slash';
+                btn.title = 'Notifications blocked - Click to learn more';
+                btn.classList.remove('text-green-500');
+                btn.classList.add('text-red-400');
+            } else {
+                icon.className = 'fa-solid fa-bell';
+                btn.title = 'Click to enable notifications';
+                btn.classList.remove('text-green-500', 'text-red-400');
+                btn.classList.add('text-orange-400');
+            }
+        }
+
+        function getNotificationStatus() {
+            if (!('Notification' in window)) {
+                return 'not_supported';
+            }
+            return Notification.permission; // 'default', 'granted', or 'denied'
+        }
+
+        // ==================== COUNTDOWN ====================
+        function updateCountdown() {
+            const now = new Date();
+            let iftar = new Date(now);
+            if (maghribTime) {
+                const [h, m] = maghribTime.split(':');
+                iftar.setHours(parseInt(h, 10), parseInt(m, 10), 0, 0);
+            } else {
+                iftar.setHours(19, 30, 0, 0);
+            }
+            if (now > iftar) {
+                iftar.setDate(iftar.getDate() + 1);
+                notificationSent = false;
+            }
+            const diff = iftar - now;
+            const hours = Math.floor(diff / 3600000);
+            const mins = Math.floor((diff % 3600000) / 60000);
+            const secs = Math.floor((diff % 60000) / 1000);
+            const text = `IFTAR: ${hours}:${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')}`;
+            const bigText = `🌙 IFTAR IN ${hours}:${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')}`;
+            const countdownEl = document.getElementById('countdown');
+            const countdownIftarEl = document.getElementById('countdown-iftar');
+            if (countdownEl) countdownEl.textContent = text;
+            if (countdownIftarEl) countdownIftarEl.textContent = bigText;
+            if (diff > 0 && diff <= 600000 && !notificationSent && 'Notification' in window && Notification.permission === 'granted') {
+                new Notification('🌙 Iftar Reminder', { body: 'Only 10 minutes left until Iftar!' });
+                notificationSent = true;
+            }
+        }
+        setInterval(updateCountdown, 1000);
+        updateCountdown();
+
+        // ==================== MAP ====================
+        function initMap() {
+            map = L.map('map', {
+                center: [47.5316, 21.6273],
+                zoom: 14,
+                zoomControl: true
+            });
+
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors',
+                maxZoom: 19
+            }).addTo(map);
+
+            renderMarkers();
+        }
+
+        function renderMarkers() {
+            // Remove old markers
+            markers.forEach(m => map.removeLayer(m));
+            markers = [];
+
+            filteredData.forEach(item => {
+                const icon = L.divIcon({
+                    html: '<div style="font-size:22px;cursor:pointer;text-shadow:0 2px 4px rgba(0,0,0,0.3);">🌙</div>',
+                    className: '',
+                    iconSize: [28, 28],
+                    iconAnchor: [14, 14]
+                });
+
+                const marker = L.marker([item.lat, item.lng], { icon })
+                    .addTo(map)
+                    .bindPopup(`<b>📍 ${item.location}</b><br>${item.mosque}`);
+                
+                markers.push(marker);
+            });
+        }
+
+        // ==================== RENDER CARDS ====================
+        function renderCards(data) {
+            const container = document.getElementById('post-container');
+            container.innerHTML = '';
+
+            data.forEach(item => {
+                const total = item.trueCount + item.fakeCount;
+                const truePercent = total > 0 ? Math.round((item.trueCount / total) * 100) : 50;
+                const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.location + ' ' + item.mosque + ', Debrecen')}`;
+
+                const card = document.createElement('div');
+                card.className = 'location-card';
+                card.dataset.id = item.id;
+                card.dataset.location = item.location.toLowerCase();
+                card.dataset.food = item.foodType;
+
+                card.innerHTML = `
+                    <div class="flex justify-between items-center mb-4">
+                        <span class="text-[9px] font-black text-gray-400 uppercase bg-gray-50 dark:bg-gray-700 px-2 py-1 rounded-md">
+                            BY: ${item.by} | 🕒 ${item.time}
+                        </span>
+                        <div class="flex gap-3">
+                            <button onclick="shareLink('${item.location.replace(/'/g, "\\'")}')" class="text-orange-500">
+                                <i class="fa fa-share-nodes"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <h3 class="text-2xl font-black mb-1 flex items-center">
+                        📍 ${item.location} ${item.verified ? '<i class="fa-solid fa-circle-check blue-tick"></i>' : ''}
+                    </h3>
+                    <div class="text-orange-600 dark:text-orange-400 font-bold text-sm mb-2">
+                        <i class="fa-solid fa-mosque"></i> ${item.mosque}
+                    </div>
+                    ${item.desc ? `<p class="text-gray-500 dark:text-gray-400 text-sm mb-4">${item.desc}</p>` : '<p class="text-gray-500 dark:text-gray-400 text-sm mb-4"></p>'}
+                    <div class="w-full bg-gray-100 dark:bg-gray-700 h-1.5 rounded-full mb-4">
+                        <div class="bg-green-500 h-full rounded-full" style="width:${truePercent}%"></div>
+                    </div>
+                    <div class="flex gap-2 mb-3">
+                        <button onclick="handleVote(${item.id}, 'true')" class="flex-1 bg-green-50 dark:bg-green-900/20 py-3 rounded-xl text-xs font-bold text-green-600 hover:bg-green-100 transition-colors" id="true-btn-${item.id}">
+                            ✅ True (${item.trueCount})
+                        </button>
+                        <button onclick="handleVote(${item.id}, 'fake')" class="flex-1 bg-red-50 dark:bg-red-900/20 py-3 rounded-xl text-xs font-bold text-red-600 hover:bg-red-100 transition-colors" id="fake-btn-${item.id}">
+                            ❌ False (${item.fakeCount})
+                        </button>
+                    </div>
+                    <a href="${mapsUrl}" target="_blank" class="block w-full bg-blue-600 text-white py-3 rounded-xl text-xs font-bold text-center hover:bg-blue-700 transition-colors">
+                        🗺️ View on Google Maps
+                    </a>
+                `;
+
+                container.appendChild(card);
+            });
+
+            document.getElementById('active-count').textContent = data.length;
+        }
+
+        // ==================== VOTING ====================
+        function handleVote(id, type) {
+            const item = allData.find(d => d.id === id);
+            if (!item) return;
+
+            // Check if user already voted (simple check - can be improved with user tracking)
+            if (hasVoted(id)) {
+                showAlert('You have already voted for this location!');
+                return;
+            }
+
+            if (type === 'true') {
+                item.trueCount++;
+            } else {
+                item.fakeCount++;
+            }
+
+            // Save vote
+            saveVote(id, type);
+
+            // Re-render the specific card
+            const total = item.trueCount + item.fakeCount;
+            const truePercent = total > 0 ? Math.round((item.trueCount / total) * 100) : 50;
+            
+            const trueBtn = document.getElementById(`true-btn-${id}`);
+            const fakeBtn = document.getElementById(`fake-btn-${id}`);
+            
+            if (trueBtn) trueBtn.textContent = `✅ True (${item.trueCount})`;
+            if (fakeBtn) fakeBtn.textContent = `❌ False (${item.fakeCount})`;
+            
+            // Update progress bar
+            const card = document.querySelector(`[data-id="${id}"]`);
+            if (card) {
+                const bar = card.querySelector('.bg-green-500');
+                if (bar) bar.style.width = truePercent + '%';
+            }
+
+            // Save all data
+            saveData();
+        }
+
+        // ==================== FILTERS ====================
+        function applyFilters() {
+            const search = document.getElementById('search-input').value.toLowerCase();
+            const foodFilter = document.getElementById('food-filter').value;
+
+            filteredData = allData.filter(item => {
+                const matchSearch = !search || 
+                    item.location.toLowerCase().includes(search) || 
+                    item.mosque.toLowerCase().includes(search);
+                const matchFood = !foodFilter || item.foodType === foodFilter;
+                return matchSearch && matchFood;
+            });
+
+            renderCards(filteredData);
+            renderMarkers();
+        }
+
+        // ==================== FORM ====================
+        function toggleForm() {
+            const form = document.getElementById('add-form');
+            form.classList.toggle('hidden');
+        }
+
+        function submitForm() {
+            const userName = document.getElementById('user-name').value.trim() || 'Anonymous';
+            const locName = document.getElementById('loc-name').value.trim();
+            const mosqueName = document.getElementById('mosque-name').value.trim();
+            const foodType = document.getElementById('food-type').value;
+            const locDesc = document.getElementById('loc-desc').value.trim();
+
+            if (!mosqueName) {
+                document.getElementById('mosque-name').style.borderColor = 'red';
+                return;
+            }
+            if (!locName) {
+                document.getElementById('loc-name').style.borderColor = 'red';
+                return;
+            }
+
+            // Add new entry
+            const newEntry = {
+                id: Date.now(),
+                by: userName,
+                time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+                location: locName,
+                mosque: mosqueName,
+                desc: locDesc,
+                trueCount: 0,
+                fakeCount: 0,
+                foodType: foodType,
+                lat: 47.5316 + (Math.random() - 0.5) * 0.05,
+                lng: 21.6273 + (Math.random() - 0.5) * 0.05,
+                verified: false
+            };
+
+            allData.unshift(newEntry);
+            filteredData = [...allData];
+            
+            // Save to localStorage (this also updates leaderboard)
+            saveData();
+            
+            // Render after save
+            renderCards(filteredData);
+            renderMarkers();
+            toggleForm();
+
+            // Clear form
+            document.getElementById('user-name').value = '';
+            document.getElementById('loc-name').value = '';
+            document.getElementById('mosque-name').value = '';
+            document.getElementById('loc-desc').value = '';
+
+            showAlert('Your iftar point has been added successfully! 🎉');
+        }
+
+        // ==================== SHARE ====================
+        function shareLink(locationName) {
+            const url = window.location.href;
+            const text = `🌙 ${locationName} - Free iftar available! Check: ${url}`;
+            
+            if (navigator.share) {
+                navigator.share({ title: 'Free Iftar in Debrecen', text: text, url: url });
+            } else {
+                navigator.clipboard.writeText(text).then(() => {
+                    showAlert('Link copied! 📋');
+                });
+            }
+        }
+
+        // ==================== DARK MODE ====================
+        function toggleDarkMode() {
+            document.documentElement.classList.toggle('dark');
+            const icon = document.getElementById('dark-icon');
+            if (document.documentElement.classList.contains('dark')) {
+                icon.className = 'fa-solid fa-sun';
+            } else {
+                icon.className = 'fa-solid fa-moon';
+            }
+        }
+
+        // ==================== ALERTS ====================
+        function showAlert(msg) {
+            document.getElementById('alert-msg').textContent = msg;
+            document.getElementById('custom-alert').classList.add('show');
+        }
+
+        function closeAlert() {
+            document.getElementById('custom-alert').classList.remove('show');
+        }
+
+        async function showNotifAlert() {
+            if (!('Notification' in window)) {
+                showAlert('Notifications are not supported in this browser.');
+                return;
+            }
+            
+            const permission = Notification.permission;
+            
+            if (permission === 'granted') {
+                showAlert('Notifications are enabled! 🔔\nYou will receive a reminder 10 minutes before Iftar.');
+                updateNotificationIcon('granted');
+            } else if (permission === 'denied') {
+                showAlert('Notifications are blocked. Please enable them in your browser settings to receive Iftar reminders.');
+                updateNotificationIcon('denied');
+            } else {
+                // Request permission
+                try {
+                    const result = await Notification.requestPermission();
+                    updateNotificationIcon(result);
+                    if (result === 'granted') {
+                        showAlert('Notifications enabled! 🔔\nYou will receive a reminder 10 minutes before Iftar.');
+                    } else {
+                        showAlert('Notification permission denied. You can enable it later in browser settings.');
+                    }
+                } catch (e) {
+                    showAlert('Could not request notification permission.');
+                }
+            }
+        }
+
+        // ==================== ISLAMIC QUOTES ====================
+        const quotes = [
+            'Prayers and good deeds bring blessings.',
+            'Ramadan teaches patience and self-control.',
+            'Dua is accepted at iftar time.',
+            'Helping others is a blessed act.',
+            'Ramadan is the month of mercy and blessings.'
+        ];
+        let quoteIndex = 0;
+
+        function rotateQuote() {
+            const el = document.getElementById('islamic-quote');
+            el.classList.remove('show');
+            setTimeout(() => {
+                quoteIndex = (quoteIndex + 1) % quotes.length;
+                el.textContent = quotes[quoteIndex];
+                el.classList.add('show');
+            }, 1000);
+        }
+        setInterval(rotateQuote, 8000);
+
+        // ==================== INIT ====================
+        window.addEventListener('load', () => {
+            // Load saved data first
+            const dataLoaded = loadData();
+
+            // Hide preloader
+            setTimeout(() => {
+                const preloader = document.getElementById('preloader');
+                preloader.style.opacity = '0';
+                preloader.style.transition = 'opacity 0.5s';
+                setTimeout(() => preloader.style.display = 'none', 500);
+            }, 1500);
+
+            // Ramadan Companion: location + prayer times + calendar
+            detectLocation();
+            
+            // Setup notifications (will update icon after DOM is ready)
+            setTimeout(() => {
+                setupNotifications();
+            }, 100);
+
+            // Init map
+            initMap();
+
+            // Render cards (will use loaded data if available)
+            renderCards(allData);
+
+            // Update leaderboard after rendering
+            updateLeaderboard();
+        });
+
+        // Close form when clicking outside
+        document.getElementById('add-form').addEventListener('click', function(e) {
+            if (e.target === this) toggleForm();
+        });
+    </script>
+</body>
+</html>
